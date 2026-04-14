@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 
 const getProducts = async ({ category_id, condition, min_price, max_price, keyword, sort, offset, limit }) => {
-    let query = `SELECT id, seller_id, category_id, title, condition_status, current_price, images, status, end_time 
+    let query = `SELECT id, seller_id, category_id, title, condition_status, current_price, images, status, start_time, end_time 
                  FROM products WHERE status = 'ACTIVE'`;
     let countQuery = `SELECT COUNT(*) as total FROM products WHERE status = 'ACTIVE'`;
     const queryParams = [];

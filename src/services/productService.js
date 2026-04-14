@@ -129,7 +129,7 @@ const createProduct = async (userId, productData) => {
         condition_status: condition_status || 'USED',
         starting_price,
         images: images || [],
-        status: 'DRAFT',
+        status: 'PENDING',
         start_time: dbStartTime,
         end_time: dbEndTime
     });
@@ -186,8 +186,7 @@ const updateMyProduct = async (sellerId, productId, payload) => {
 
     if (payload.start_time !== undefined) {
         const reqStart = dayjs(payload.start_time);
-        const now = getNowVN();
-        if (reqStart.isValid() && reqStart.isAfter(now)) {
+        if (reqStart.isValid()) {
             updateData.start_time = toMySQLDatetime(reqStart);
         }
     }
