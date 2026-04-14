@@ -19,7 +19,12 @@ const placeBid = async (productId, bidderId, amount) => {
         if (product.status !== 'ACTIVE') throw new Error('Product is not active');
         
         const now = getNowVN();
+        const startDayjsVal = require('dayjs')(product.start_time);
         const endDayjsVal = require('dayjs')(product.end_time);
+        
+        if (now.isBefore(startDayjsVal)) {
+            throw new Error('Auction has not started yet');
+        }
 
         if (endDayjsVal.isBefore(now)) {
             throw new Error('Auction has ended');

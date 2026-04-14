@@ -64,7 +64,7 @@ app.set('io', io);
 require('./src/sockets')(io);
 
 // Initialize Cron Jobs
-require('./src/cron');
+require('./src/cron')(io);
 
 const startServer = async () => {
   try {

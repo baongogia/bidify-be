@@ -1,6 +1,7 @@
 const productRepo = require('../repositories/productRepository');
 const adminRepo = require('../repositories/adminRepository');
-const { getBidIncrement, maskUsername } = require('../utils/timeHelper');
+const { getBidIncrement, maskUsername, getNowVN, toMySQLDatetime } = require('../utils/timeHelper');
+const dayjs = require('dayjs');
 const pool = require('../config/db');
 
 const listProducts = async (queryArgs, userId) => {
@@ -92,10 +93,10 @@ const getProductDetail = async (id, userId) => {
 };
 
 const createProduct = async (userId, productData) => {
-    const { category_id, title, description, condition_status, starting_price, images, duration_hours } = productData;
+    const { category_id, title, description, condition_status, starting_price, images, duration_minutes, start_time } = productData;
 
     // Validation
-    if (!category_id || !title || !starting_price || !duration_hours) {
+    if (!category_id || !title || !starting_price || !duration_minutes) {
         throw new Error('Missing required fields');
     }
 
@@ -103,13 +104,22 @@ const createProduct = async (userId, productData) => {
         throw new Error('Starting price must be positive');
     }
 
-    if (duration_hours < 1 || duration_hours > 168) {
-        throw new Error('Duration must be between 1 and 168 hours (7 days)');
+    if (duration_minutes < 1 || duration_minutes > 10080) {
+        throw new Error('Thời gian đấu giá tối thiểu 1 phút và tối đa 7 ngày');
     }
 
-    const now = new Date();
-    const start_time = now.toISOString().slice(0, 19).replace('T', ' ');
-    const end_time = new Date(now.getTime() + duration_hours * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    let startDayjs = getNowVN();
+    if (start_time) {
+        const reqStart = dayjs(start_time);
+        if (reqStart.isValid() && reqStart.isAfter(startDayjs)) {
+            startDayjs = reqStart;
+        }
+    }
+
+    const endDayjs = startDayjs.add(duration_minutes, 'minute');
+
+    const dbStartTime = toMySQLDatetime(startDayjs);
+    const dbEndTime = toMySQLDatetime(endDayjs);
 
     const productId = await productRepo.createProduct({
         seller_id: userId,
@@ -120,8 +130,8 @@ const createProduct = async (userId, productData) => {
         starting_price,
         images: images || [],
         status: 'DRAFT',
-        start_time,
-        end_time
+        start_time: dbStartTime,
+        end_time: dbEndTime
     });
 
     await adminRepo.createProductModeration(productId, 'PENDING');
@@ -174,14 +184,32 @@ const updateMyProduct = async (sellerId, productId, payload) => {
         updateData.images = JSON.stringify(images);
     }
 
-    if (payload.duration_hours !== undefined) {
-        const durationHours = Number(payload.duration_hours);
-        if (!Number.isFinite(durationHours) || durationHours < 1 || durationHours > 240) {
-            throw new Error('Duration must be between 1 and 240 hours (10 days)');
+    if (payload.start_time !== undefined) {
+        const reqStart = dayjs(payload.start_time);
+        const now = getNowVN();
+        if (reqStart.isValid() && reqStart.isAfter(now)) {
+            updateData.start_time = toMySQLDatetime(reqStart);
         }
-        const now = new Date();
-        const endTime = new Date(now.getTime() + durationHours * 60 * 60 * 1000);
-        updateData.end_time = endTime.toISOString().slice(0, 19).replace('T', ' ');
+    }
+
+    let durationMinutes = null;
+    if (payload.duration_minutes !== undefined || updateData.start_time !== undefined) {
+        if (payload.duration_minutes !== undefined) {
+            durationMinutes = Number(payload.duration_minutes);
+            if (isNaN(durationMinutes) || durationMinutes < 1 || durationMinutes > 10080) {
+                throw new Error('Thời gian đấu giá tối thiểu 1 phút và tối đa 7 ngày');
+            }
+        } else {
+            const currentStart = dayjs(product.start_time);
+            const currentEnd = dayjs(product.end_time);
+            durationMinutes = currentEnd.diff(currentStart, 'minute');
+        }
+        
+        if (durationMinutes !== null) {
+            const finalStartDayjs = updateData.start_time ? dayjs(updateData.start_time) : dayjs(product.start_time);
+            const finalEndDayjs = finalStartDayjs.add(durationMinutes, 'minute');
+            updateData.end_time = toMySQLDatetime(finalEndDayjs);
+        }
     }
 
     if (updateData.starting_price !== undefined) {
