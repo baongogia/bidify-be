@@ -113,14 +113,44 @@ const requestEditProduct = async (req, res) => {
 
 const deleteProduct = async (req, res) => {
     try {
-        await adminService.moderateProduct(req.user.id, Number(req.params.id), 'delete');
+        const penalize = !!req.body?.penalize;
+        const reason = req.body?.reason != null ? String(req.body.reason).trim() : '';
+        if (penalize && !reason) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cần nhập lý do khi gỡ bài và khóa tài khoản người bán',
+            });
+        }
+        await adminService.moderateProduct(
+            req.user.id,
+            Number(req.params.id),
+            penalize ? 'delete-and-lock' : 'delete',
+            penalize ? reason : reason || null,
+        );
         res.status(200).json({ success: true, message: 'Product deleted successfully' });
     } catch (error) {
-        if (error.message.includes('not found') || error.message.includes('Invalid')) {
+        if (
+            error.message.includes('not found') ||
+            error.message.includes('Invalid') ||
+            error.message.includes('Reason')
+        ) {
             return res.status(400).json({ success: false, message: error.message });
         }
         console.error('deleteProduct moderation error:', error);
         res.status(500).json({ success: false, message: 'Failed to delete product' });
+    }
+};
+
+const dismissReview = async (req, res) => {
+    try {
+        await adminService.dismissProductReview(req.user.id, Number(req.params.id));
+        res.status(200).json({ success: true, message: 'Đã bỏ cờ kiểm tra' });
+    } catch (error) {
+        if (error.message.includes('not found')) {
+            return res.status(404).json({ success: false, message: error.message });
+        }
+        console.error('dismissReview error:', error);
+        res.status(500).json({ success: false, message: 'Failed to dismiss review flag' });
     }
 };
 
@@ -170,6 +200,7 @@ module.exports = {
     rejectProduct,
     requestEditProduct,
     deleteProduct,
+    dismissReview,
     getActionLogs,
     getSettings,
     updateSetting

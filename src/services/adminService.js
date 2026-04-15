@@ -116,8 +116,7 @@ const listModerationProducts = async (queryArgs) => {
   const limit = Math.min(Math.max(parseInt(queryArgs.limit, 10) || 20, 1), 100);
   const offset = (page - 1) * limit;
 
-  const result = await adminRepo.getModerationProducts({
-    status: queryArgs.status || "PENDING",
+  const result = await adminRepo.getReviewQueueProducts({
     query: (queryArgs.q || "").trim(),
     offset,
     limit,
@@ -132,6 +131,21 @@ const listModerationProducts = async (queryArgs) => {
       totalPages: Math.ceil(result.total / limit),
     },
   };
+};
+
+const dismissProductReview = async (adminUserId, productId) => {
+  const ok = await adminRepo.clearProductReviewFlags(productId);
+  if (!ok) {
+    throw new Error("Product not found");
+  }
+  await adminRepo.addAdminActionLog({
+    adminUserId,
+    targetType: "PRODUCT",
+    targetId: productId,
+    actionType: "DISMISS_REVIEW_FLAG",
+    metadata: null,
+  });
+  return true;
 };
 
 const moderateProduct = async (adminUserId, productId, action, reason) => {
@@ -160,11 +174,20 @@ const moderateProduct = async (adminUserId, productId, action, reason) => {
     moderationStatus = "DELETED";
     productStatus = "CANCELLED";
     actionType = "DELETE_PRODUCT";
+  } else if (action === "delete-and-lock") {
+    moderationStatus = "DELETED";
+    productStatus = "CANCELLED";
+    actionType = "DELETE_AND_LOCK_SELLER";
   } else {
     throw new Error("Invalid moderation action");
   }
 
-  if ((action === "reject" || action === "request-edit") && !reason) {
+  if (
+    (action === "reject" ||
+      action === "request-edit" ||
+      action === "delete-and-lock") &&
+    !reason
+  ) {
     throw new Error("Reason is required for this action");
   }
 
@@ -184,14 +207,20 @@ const moderateProduct = async (adminUserId, productId, action, reason) => {
     metadata: { reason: reason || null },
   });
 
-  if (action !== "delete") {
-    await adminRepo.createNotification(
+  if (action === "delete-and-lock") {
+    await lockUser(
+      adminUserId,
       product.seller_id,
-      "PRODUCT_MODERATED",
-      "Cap nhat kiem duyet tin dang",
-      `Tin dang "${product.title}" da duoc xu ly: ${moderationStatus}${reason ? `. Ly do: ${reason}` : ""}`,
+      reason || "Vi phạm nội dung / báo cáo",
     );
   }
+
+  await adminRepo.createNotification(
+    product.seller_id,
+    "PRODUCT_MODERATED",
+    "Cập nhật kiểm duyệt tin đăng",
+    `Tin đăng "${product.title}" đã được xử lý: ${moderationStatus}${reason ? `. Lý do: ${reason}` : ""}`,
+  );
 
   return true;
 };
@@ -243,6 +272,7 @@ module.exports = {
   removeUser,
   getUserActivity,
   listModerationProducts,
+  dismissProductReview,
   moderateProduct,
   listLogs,
   getSettings,

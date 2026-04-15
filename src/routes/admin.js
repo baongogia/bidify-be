@@ -12,6 +12,7 @@ router.delete('/users/:id', adminController.deleteUser);
 router.get('/users/:id/activity', adminController.getUserActivity);
 
 router.get('/moderation/products', adminController.getModerationProducts);
+router.put('/moderation/products/:id/dismiss-review', adminController.dismissReview);
 router.put('/moderation/products/:id/approve', adminController.approveProduct);
 router.put('/moderation/products/:id/reject', adminController.rejectProduct);
 router.put('/moderation/products/:id/request-edit', adminController.requestEditProduct);

@@ -52,12 +52,18 @@ const createProduct = async (req, res) => {
         const userId = req.user.id;
         const productData = req.body;
 
-        const productId = await productService.createProduct(userId, productData);
-        
-        res.status(201).json({ 
-            success: true, 
-            message: 'Product submitted for moderation',
-            data: { id: productId }
+        const result = await productService.createProduct(userId, productData);
+
+        res.status(201).json({
+            success: true,
+            message: result.flagged
+                ? 'Tin đã lên sàn; hệ thống đã đánh dấu cần admin xem lại.'
+                : 'Tin đã được đăng lên sàn.',
+            data: {
+                id: result.productId,
+                flagged: result.flagged,
+                flagReasons: result.flagReasons,
+            },
         });
     } catch (error) {
         console.error(
@@ -138,6 +144,27 @@ const deleteMyProduct = async (req, res) => {
     }
 };
 
+const reportProduct = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const productId = Number(req.params.id);
+        await productService.reportProduct(userId, productId, req.body.reason);
+        res.status(200).json({ success: true, message: 'Đã ghi nhận báo cáo' });
+    } catch (error) {
+        if (
+            error.message.includes('not found') ||
+            error.message.includes('Không thể') ||
+            error.message.includes('không thể') ||
+            error.message.includes('Vui lòng') ||
+            error.message.includes('Bạn đã')
+        ) {
+            return res.status(400).json({ success: false, message: error.message });
+        }
+        console.error('reportProduct error:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
 const checkoutPayment = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -160,6 +187,7 @@ module.exports = {
     getProducts,
     getProductDetail,
     createProduct,
+    reportProduct,
     getMyProducts,
     updateMyProduct,
     deleteMyProduct,

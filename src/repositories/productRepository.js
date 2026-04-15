@@ -1,59 +1,89 @@
 const pool = require("../config/db");
 
-const getProducts = async ({ category_id, condition, min_price, max_price, keyword, sort, offset, limit, status, upcoming }) => {
-    let query = `SELECT id, seller_id, category_id, title, condition_status, current_price, images, status, start_time, end_time 
+const upcomingOpen = (upcoming) =>
+  upcoming === true ||
+  upcoming === "true" ||
+  upcoming === 1 ||
+  upcoming === "1";
+
+const getProducts = async ({
+  category_id,
+  condition,
+  min_price,
+  max_price,
+  keyword,
+  sort,
+  offset,
+  limit,
+  status,
+  upcoming,
+  nowSql,
+}) => {
+  let query = `SELECT id, seller_id, category_id, title, condition_status, current_price, images, status, start_time, end_time 
                  FROM products WHERE 1=1`;
-    let countQuery = `SELECT COUNT(*) as total FROM products WHERE 1=1`;
-    const queryParams = [];
+  let countQuery = `SELECT COUNT(*) as total FROM products WHERE 1=1`;
+  const whereParams = [];
 
-    if (upcoming === 'true') {
-        query += ` AND start_time > NOW()`;
-        countQuery += ` AND start_time > NOW()`;
-    }
+  const at = nowSql;
 
-    if (status && status !== 'all') {
-        query += ` AND status = ?`;
-        countQuery += ` AND status = ?`;
-        queryParams.push(status);
-    }
+  if (upcomingOpen(upcoming)) {
+    query += ` AND end_time > ?`;
+    countQuery += ` AND end_time > ?`;
+    whereParams.push(at);
+  }
+
+  if (upcoming === "scheduled") {
+    query += ` AND start_time > ?`;
+    countQuery += ` AND start_time > ?`;
+    whereParams.push(at);
+  }
+
+  const statusRaw = status != null ? String(status).trim() : "";
+  if (statusRaw && statusRaw !== "all") {
+    query += ` AND status = ?`;
+    countQuery += ` AND status = ?`;
+    whereParams.push(statusRaw);
+  } else {
+    query += ` AND status IN ('ACTIVE', 'UNSOLD')`;
+    countQuery += ` AND status IN ('ACTIVE', 'UNSOLD')`;
+  }
 
   if (category_id) {
     query += ` AND category_id = ?`;
     countQuery += ` AND category_id = ?`;
-    queryParams.push(category_id);
+    whereParams.push(category_id);
   }
 
   if (condition) {
     query += ` AND condition_status = ?`;
     countQuery += ` AND condition_status = ?`;
-    queryParams.push(condition);
+    whereParams.push(condition);
   }
 
   if (min_price) {
     query += ` AND current_price >= ?`;
     countQuery += ` AND current_price >= ?`;
-    queryParams.push(min_price);
+    whereParams.push(min_price);
   }
 
   if (max_price) {
     query += ` AND current_price <= ?`;
     countQuery += ` AND current_price <= ?`;
-    queryParams.push(max_price);
+    whereParams.push(max_price);
   }
 
   if (keyword && keyword.trim()) {
     query += ` AND (title LIKE ? OR description LIKE ?)`;
     countQuery += ` AND (title LIKE ? OR description LIKE ?)`;
     const likeKeyword = `%${keyword.trim()}%`;
-    queryParams.push(likeKeyword, likeKeyword);
+    whereParams.push(likeKeyword, likeKeyword);
   }
 
-  // Sort
+  const orderParams = [];
   switch (sort) {
     case "ending_soon":
-      // Ưu tiên phiên chưa kết thúc (end_time > NOW), trong nhóm đó sắp kết thúc trước.
-      // Phiên đã kết thúc (end_time trong quá khứ) xếp sau để không chiếm hết trang đầu khi phân trang.
-      query += ` ORDER BY (end_time <= NOW()) ASC, end_time ASC`;
+      query += ` ORDER BY (end_time <= ?) ASC, end_time ASC`;
+      orderParams.push(at);
       break;
     case "newly_listed":
       query += ` ORDER BY created_at DESC`;
@@ -65,13 +95,14 @@ const getProducts = async ({ category_id, condition, min_price, max_price, keywo
       query += ` ORDER BY current_price DESC`;
       break;
     default:
-      query += ` ORDER BY created_at DESC`; // Default
+      query += ` ORDER BY created_at DESC`;
   }
 
   query += ` LIMIT ? OFFSET ?`;
 
-  const [rows] = await pool.query(query, [...queryParams, limit, offset]);
-  const [countRows] = await pool.query(countQuery, queryParams);
+  const dataParams = [...whereParams, ...orderParams, limit, offset];
+  const [rows] = await pool.query(query, dataParams);
+  const [countRows] = await pool.query(countQuery, whereParams);
 
   return { data: rows, total: countRows[0].total };
 };
@@ -138,6 +169,9 @@ const createProduct = async (productData) => {
     location,
     video_url,
     attributes,
+    needs_review,
+    auto_flag_reason,
+    report_count,
   } = productData;
 
   const attrsJson =
@@ -147,11 +181,14 @@ const createProduct = async (productData) => {
         ? attributes
         : JSON.stringify(attributes);
 
+  const nr = needs_review ? 1 : 0;
+  const rc = report_count != null ? Number(report_count) : 0;
+
   const [result] = await pool.query(
     `INSERT INTO products 
         (seller_id, category_id, title, description, condition_status, starting_price, current_price, images, status, start_time, end_time,
-         buy_now_price, bid_increment, deposit_required, location, video_url, attributes) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         buy_now_price, bid_increment, deposit_required, location, video_url, attributes, needs_review, auto_flag_reason, report_count) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       seller_id,
       category_id,
@@ -170,6 +207,9 @@ const createProduct = async (productData) => {
       location ?? null,
       video_url ?? null,
       attrsJson,
+      nr,
+      auto_flag_reason ?? null,
+      rc,
     ],
   );
 
@@ -205,6 +245,20 @@ const updateProductStatusById = async (id, status) => {
   return result.affectedRows > 0;
 };
 
+const insertProductReport = async (productId, reporterId, reason) => {
+  await pool.query(
+    `INSERT INTO product_reports (product_id, reporter_id, reason) VALUES (?, ?, ?)`,
+    [productId, reporterId, reason],
+  );
+};
+
+const incrementReportAndFlagReview = async (id) => {
+  await pool.query(
+    `UPDATE products SET report_count = report_count + 1, needs_review = 1 WHERE id = ?`,
+    [id],
+  );
+};
+
 module.exports = {
   getProducts,
   getProductById,
@@ -213,4 +267,6 @@ module.exports = {
   createProduct,
   updateProductById,
   updateProductStatusById,
+  insertProductReport,
+  incrementReportAndFlagReview,
 };

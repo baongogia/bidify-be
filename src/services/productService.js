@@ -1,5 +1,5 @@
 const productRepo = require('../repositories/productRepository');
-const adminRepo = require('../repositories/adminRepository');
+const contentModerationService = require('./contentModerationService');
 const { getBidIncrement, maskUsername, getNowVN, toMySQLDatetime } = require('../utils/timeHelper');
 const dayjs = require('dayjs');
 const pool = require('../config/db');
@@ -8,6 +8,8 @@ const listProducts = async (queryArgs, userId) => {
     const page = parseInt(queryArgs.page) || 1;
     const limit = parseInt(queryArgs.limit) || 10;
     const offset = (page - 1) * limit;
+
+    const nowSql = toMySQLDatetime(getNowVN());
 
     const queryParams = {
         category_id: queryArgs.category_id,
@@ -19,7 +21,8 @@ const listProducts = async (queryArgs, userId) => {
         status: queryArgs.status,
         upcoming: queryArgs.upcoming,
         offset,
-        limit
+        limit,
+        nowSql,
     };
 
     const { data, total } = await productRepo.getProducts(queryParams);
@@ -147,7 +150,10 @@ const createProduct = async (userId, productData) => {
 
     const startNum = Number(starting_price);
     let buyNow = buy_now_price != null && buy_now_price !== '' ? Number(buy_now_price) : null;
-    if (buyNow != null && (!Number.isFinite(buyNow) || buyNow < startNum)) {
+    if (buyNow != null && (!Number.isFinite(buyNow) || buyNow < 0)) {
+        throw new Error('Giá mua ngay không được âm');
+    }
+    if (buyNow != null && buyNow < startNum) {
         throw new Error('Giá mua ngay phải lớn hơn hoặc bằng giá khởi điểm');
     }
 
@@ -175,6 +181,16 @@ const createProduct = async (userId, productData) => {
     const dbStartTime = toMySQLDatetime(startDayjs);
     const dbEndTime = toMySQLDatetime(endDayjs);
 
+    const filterResult = contentModerationService.evaluateProductContent({
+        title,
+        description: description || '',
+        images: images || [],
+    });
+    const needs_review = filterResult.flagged ? 1 : 0;
+    const auto_flag_reason = filterResult.flagged
+        ? JSON.stringify({ reasons: filterResult.reasons })
+        : null;
+
     const productId = await productRepo.createProduct({
         seller_id: userId,
         category_id,
@@ -183,7 +199,7 @@ const createProduct = async (userId, productData) => {
         condition_status: condition_status || 'USED',
         starting_price,
         images: images || [],
-        status: 'PENDING',
+        status: 'ACTIVE',
         start_time: dbStartTime,
         end_time: dbEndTime,
         buy_now_price: buyNow,
@@ -192,11 +208,44 @@ const createProduct = async (userId, productData) => {
         location: location ? String(location).trim() || null : null,
         video_url: video_url ? String(video_url).trim() || null : null,
         attributes: attributes || null,
+        needs_review,
+        auto_flag_reason,
+        report_count: 0,
     });
 
-    await adminRepo.createProductModeration(productId, 'PENDING');
+    return {
+        productId,
+        flagged: filterResult.flagged,
+        flagReasons: filterResult.reasons,
+    };
+};
 
-    return productId;
+const reportProduct = async (reporterId, productId, reason) => {
+    const text = String(reason || '').trim();
+    if (!text) {
+        throw new Error('Vui lòng nhập lý do báo cáo');
+    }
+    const product = await productRepo.getProductById(productId);
+    if (!product) {
+        throw new Error('Product not found');
+    }
+    if (Number(product.seller_id) === Number(reporterId)) {
+        throw new Error('Không thể báo cáo chính tin đăng của bạn');
+    }
+    if (['CANCELLED', 'DRAFT'].includes(product.status)) {
+        throw new Error('Tin này không thể báo cáo');
+    }
+
+    try {
+        await productRepo.insertProductReport(Number(productId), reporterId, text);
+    } catch (e) {
+        if (e.code === 'ER_DUP_ENTRY') {
+            throw new Error('Bạn đã báo cáo tin này trước đó');
+        }
+        throw e;
+    }
+    await productRepo.incrementReportAndFlagReview(Number(productId));
+    return true;
 };
 
 const getMyProducts = async (sellerId) => {
@@ -302,8 +351,8 @@ const updateMyProduct = async (sellerId, productId, payload) => {
 
     if (updateData.starting_price !== undefined) {
         const newPrice = Number(updateData.starting_price);
-        if (!Number.isFinite(newPrice) || newPrice <= 0) {
-            throw new Error('Starting price must be positive');
+        if (!Number.isFinite(newPrice) || newPrice < 0) {
+            throw new Error('Giá khởi điểm không được âm');
         }
         updateData.current_price = newPrice;
     }
@@ -395,6 +444,7 @@ module.exports = {
     listProducts,
     getProductDetail,
     createProduct,
+    reportProduct,
     getMyProducts,
     updateMyProduct,
     deleteMyProduct,

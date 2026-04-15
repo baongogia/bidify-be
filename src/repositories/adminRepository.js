@@ -111,7 +111,36 @@ const initAdminTables = async () => {
         "ALTER TABLE products ADD COLUMN attributes JSON DEFAULT NULL",
       );
     }
+    if (!(await columnExists("products", "needs_review"))) {
+      await pool.query(
+        "ALTER TABLE products ADD COLUMN needs_review TINYINT(1) NOT NULL DEFAULT 0",
+      );
+    }
+    if (!(await columnExists("products", "auto_flag_reason"))) {
+      await pool.query(
+        "ALTER TABLE products ADD COLUMN auto_flag_reason TEXT NULL",
+      );
+    }
+    if (!(await columnExists("products", "report_count"))) {
+      await pool.query(
+        "ALTER TABLE products ADD COLUMN report_count INT NOT NULL DEFAULT 0",
+      );
+    }
   }
+
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS product_reports (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            product_id INT NOT NULL,
+            reporter_id INT NOT NULL,
+            reason VARCHAR(600) NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_product_reporter (product_id, reporter_id),
+            INDEX idx_product_reports_product (product_id),
+            CONSTRAINT fk_product_reports_product FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+            CONSTRAINT fk_product_reports_user FOREIGN KEY (reporter_id) REFERENCES users(id) ON DELETE CASCADE
+        )`,
+  );
 
   await pool.query(
     `CREATE TABLE IF NOT EXISTS product_moderation (
@@ -165,6 +194,14 @@ const initAdminTables = async () => {
                 description = COALESCE(description, VALUES(description))`,
       [item.setting_key, item.setting_value, item.description],
     );
+  }
+
+  try {
+    await pool.query(
+      `UPDATE products SET status = 'ACTIVE' WHERE status = 'PENDING'`,
+    );
+  } catch {
+    /* ignore if schema differs */
   }
 };
 
@@ -299,6 +336,64 @@ const createProductModeration = async (
             updated_at = CURRENT_TIMESTAMP`,
     [productId, status, adminId, reason],
   );
+};
+
+const getReviewQueueProducts = async ({ query, offset, limit }) => {
+  let sql = `SELECT p.id,
+                      p.title,
+                      p.description,
+                      p.status AS product_status,
+                      p.starting_price,
+                      p.current_price,
+                      p.images,
+                      p.created_at,
+                      p.start_time,
+                      p.end_time,
+                      p.needs_review,
+                      p.auto_flag_reason,
+                      p.report_count,
+                      u.id AS seller_id,
+                      u.name AS seller_name,
+                      u.email AS seller_email,
+                      c.name AS category_name
+               FROM products p
+               JOIN users u ON u.id = p.seller_id
+               JOIN categories c ON c.id = p.category_id
+               WHERE p.status NOT IN ('CANCELLED', 'DRAFT')
+                 AND p.needs_review = 1`;
+  let countSql = `SELECT COUNT(*) AS total
+                    FROM products p
+                    JOIN users u ON u.id = p.seller_id
+                    WHERE p.status NOT IN ('CANCELLED', 'DRAFT')
+                      AND p.needs_review = 1`;
+  const params = [];
+
+  if (query) {
+    const qClause =
+      " AND (p.title LIKE ? OR u.name LIKE ? OR u.email LIKE ? OR CAST(p.id AS CHAR) LIKE ?)";
+    sql += qClause;
+    countSql += qClause;
+    const keyword = `%${query}%`;
+    params.push(keyword, keyword, keyword, keyword);
+  }
+
+  sql += " ORDER BY p.report_count DESC, p.created_at DESC LIMIT ? OFFSET ?";
+
+  const [rows] = await pool.query(sql, [...params, limit, offset]);
+  const [countRows] = await pool.query(countSql, params);
+
+  return {
+    products: rows,
+    total: countRows[0].total,
+  };
+};
+
+const clearProductReviewFlags = async (productId) => {
+  const [result] = await pool.query(
+    `UPDATE products SET needs_review = 0, auto_flag_reason = NULL WHERE id = ?`,
+    [productId],
+  );
+  return result.affectedRows > 0;
 };
 
 const getModerationProducts = async ({ status, query, offset, limit }) => {
@@ -454,6 +549,8 @@ module.exports = {
   deleteUser,
   getUserActivity,
   createProductModeration,
+  getReviewQueueProducts,
+  clearProductReviewFlags,
   getModerationProducts,
   findProductForModeration,
   updateProductStatus,
