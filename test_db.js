@@ -83,3 +83,9 @@ async function testDatabase() {
 }
 
 testDatabase();
+  } finally {
+    await connection.end();
+  }
+};
+
+test();

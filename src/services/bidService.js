@@ -41,9 +41,14 @@ const placeBid = async (productId, bidderId, amount) => {
             throw new Error('You are already the highest bidder');
         }
 
-        // 5. Min valid bid
+        // 5. Min valid bid (tùy bước giá sản phẩm hoặc mặc định hệ thống)
         const currentPrice = Number(product.current_price);
-        const minValidBid = currentPrice + getBidIncrement(currentPrice);
+        const customInc =
+            product.bid_increment != null && Number(product.bid_increment) > 0
+                ? Number(product.bid_increment)
+                : null;
+        const increment = customInc ?? getBidIncrement(currentPrice);
+        const minValidBid = currentPrice + increment;
 
         if (finalAmount < minValidBid) {
             throw new Error(`Bid must be at least ${minValidBid}`);

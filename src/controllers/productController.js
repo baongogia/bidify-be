@@ -60,9 +60,22 @@ const createProduct = async (req, res) => {
             data: { id: productId }
         });
     } catch (error) {
-        console.error('createProduct error:', error);
-        
-        if (error.message.includes('required fields') || error.message.includes('must be')) {
+        console.error(
+            'createProduct error:',
+            error.code || '',
+            error.sqlMessage || error.message,
+            error.stack,
+        );
+
+        if (
+            error.message.includes('required fields') ||
+            error.message.includes('must be') ||
+            error.message.includes('Giá') ||
+            error.message.includes('Bước giá') ||
+            error.message.includes('cọc') ||
+            error.message.includes('Thời gian đấu giá') ||
+            error.message.includes('Danh mục')
+        ) {
             return res.status(400).json({ success: false, message: error.message });
         }
         

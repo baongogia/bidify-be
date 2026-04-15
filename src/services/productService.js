@@ -16,6 +16,8 @@ const listProducts = async (queryArgs, userId) => {
         max_price: queryArgs.max_price,
         keyword: queryArgs.keyword,
         sort: queryArgs.sort,
+        status: queryArgs.status,
+        upcoming: queryArgs.upcoming,
         offset,
         limit
     };
@@ -72,8 +74,21 @@ const getProductDetail = async (id, userId) => {
         }
     } catch(e) {}
 
-    // Calculate min_valid_bid
-    product.min_valid_bid = Number(product.current_price) + getBidIncrement(product.current_price);
+    try {
+        if (product.attributes != null && typeof product.attributes === 'string') {
+            product.attributes = JSON.parse(product.attributes);
+        }
+    } catch (e) {
+        product.attributes = null;
+    }
+
+    const current = Number(product.current_price);
+    const customInc =
+        product.bid_increment != null && Number(product.bid_increment) > 0
+            ? Number(product.bid_increment)
+            : null;
+    product.bid_step = customInc ?? getBidIncrement(current);
+    product.min_valid_bid = current + product.bid_step;
 
     // Check watchlist
     product.is_watchlisted = false;
@@ -93,11 +108,33 @@ const getProductDetail = async (id, userId) => {
 };
 
 const createProduct = async (userId, productData) => {
-    const { category_id, title, description, condition_status, starting_price, images, duration_minutes, start_time } = productData;
+    const {
+        category_id,
+        title,
+        description,
+        condition_status,
+        starting_price,
+        images,
+        duration_minutes,
+        start_time,
+        buy_now_price,
+        bid_increment,
+        deposit_required,
+        location,
+        video_url,
+        attributes,
+    } = productData;
 
     // Validation
     if (!category_id || !title || !starting_price || !duration_minutes) {
         throw new Error('Missing required fields');
+    }
+
+    const [catRows] = await pool.query('SELECT id FROM categories WHERE id = ? LIMIT 1', [
+        Number(category_id),
+    ]);
+    if (!catRows.length) {
+        throw new Error('Danh mục không tồn tại');
     }
 
     if (starting_price < 0) {
@@ -106,6 +143,23 @@ const createProduct = async (userId, productData) => {
 
     if (duration_minutes < 1 || duration_minutes > 10080) {
         throw new Error('Thời gian đấu giá tối thiểu 1 phút và tối đa 7 ngày');
+    }
+
+    const startNum = Number(starting_price);
+    let buyNow = buy_now_price != null && buy_now_price !== '' ? Number(buy_now_price) : null;
+    if (buyNow != null && (!Number.isFinite(buyNow) || buyNow < startNum)) {
+        throw new Error('Giá mua ngay phải lớn hơn hoặc bằng giá khởi điểm');
+    }
+
+    let bidInc =
+        bid_increment != null && bid_increment !== '' ? Number(bid_increment) : null;
+    if (bidInc != null && (!Number.isFinite(bidInc) || bidInc < 1)) {
+        throw new Error('Bước giá tùy chỉnh không hợp lệ');
+    }
+
+    const deposit = deposit_required != null && deposit_required !== '' ? Number(deposit_required) : 0;
+    if (!Number.isFinite(deposit) || deposit < 0) {
+        throw new Error('Tiền cọc không hợp lệ');
     }
 
     let startDayjs = getNowVN();
@@ -131,7 +185,13 @@ const createProduct = async (userId, productData) => {
         images: images || [],
         status: 'PENDING',
         start_time: dbStartTime,
-        end_time: dbEndTime
+        end_time: dbEndTime,
+        buy_now_price: buyNow,
+        bid_increment: bidInc,
+        deposit_required: deposit,
+        location: location ? String(location).trim() || null : null,
+        video_url: video_url ? String(video_url).trim() || null : null,
+        attributes: attributes || null,
     });
 
     await adminRepo.createProductModeration(productId, 'PENDING');
@@ -143,14 +203,22 @@ const getMyProducts = async (sellerId) => {
     const products = await productRepo.getProductsBySellerId(sellerId);
 
     return products.map((product) => {
-        if (typeof product.images === 'string') {
+        let next = { ...product };
+        if (typeof next.images === 'string') {
             try {
-                return { ...product, images: JSON.parse(product.images) };
+                next.images = JSON.parse(next.images);
             } catch (e) {
-                return { ...product, images: [] };
+                next.images = [];
             }
         }
-        return product;
+        if (next.attributes != null && typeof next.attributes === 'string') {
+            try {
+                next.attributes = JSON.parse(next.attributes);
+            } catch (e) {
+                next.attributes = null;
+            }
+        }
+        return next;
     });
 };
 
@@ -169,12 +237,33 @@ const updateMyProduct = async (sellerId, productId, payload) => {
     }
 
     const updateData = {};
-    const allowedFields = ['category_id', 'title', 'description', 'condition_status', 'starting_price'];
+    const allowedFields = [
+        'category_id',
+        'title',
+        'description',
+        'condition_status',
+        'starting_price',
+        'buy_now_price',
+        'bid_increment',
+        'deposit_required',
+        'location',
+        'video_url',
+    ];
     allowedFields.forEach((field) => {
         if (payload[field] !== undefined) {
             updateData[field] = payload[field];
         }
     });
+
+    if (payload.attributes !== undefined) {
+        const a = payload.attributes;
+        updateData.attributes =
+            a === null || a === ''
+                ? null
+                : typeof a === 'string'
+                  ? a
+                  : JSON.stringify(a);
+    }
 
     if (payload.images !== undefined) {
         const images = Array.isArray(payload.images) ? payload.images : [];
@@ -217,6 +306,32 @@ const updateMyProduct = async (sellerId, productId, payload) => {
             throw new Error('Starting price must be positive');
         }
         updateData.current_price = newPrice;
+    }
+
+    if (updateData.buy_now_price !== undefined) {
+        const v = updateData.buy_now_price;
+        updateData.buy_now_price =
+            v === '' || v === null ? null : Number(v);
+    }
+    if (updateData.bid_increment !== undefined) {
+        const v = updateData.bid_increment;
+        updateData.bid_increment =
+            v === '' || v === null ? null : Number(v);
+    }
+    if (updateData.deposit_required !== undefined) {
+        updateData.deposit_required = Number(updateData.deposit_required) || 0;
+    }
+    if (updateData.location !== undefined) {
+        updateData.location =
+            updateData.location === '' || updateData.location == null
+                ? null
+                : String(updateData.location).trim();
+    }
+    if (updateData.video_url !== undefined) {
+        updateData.video_url =
+            updateData.video_url === '' || updateData.video_url == null
+                ? null
+                : String(updateData.video_url).trim();
     }
 
     if (Object.keys(updateData).length === 0) {
