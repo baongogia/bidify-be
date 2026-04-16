@@ -11,7 +11,7 @@ const pool = mysql.createPool({
   queueLimit: 0,
   timezone: '+07:00', // Giờ Việt Nam
   multipleStatements: true,
-  ssl: process.env.DB_SSL === 'true' ? {
+  ssl: (process.env.DB_SSL === 'true' || (process.env.DB_HOST && !process.env.DB_HOST.includes('localhost') && !process.env.DB_HOST.includes('127.0.0.1'))) ? {
     minVersion: 'TLSv1.2',
     rejectUnauthorized: true
   } : undefined
