@@ -25,6 +25,10 @@ const ensureDatabaseReady = async () => {
     user: DB_USER,
     password: DB_PASSWORD,
     multipleStatements: true,
+    ssl: process.env.DB_SSL === 'true' ? {
+      minVersion: 'TLSv1.2',
+      rejectUnauthorized: true
+    } : undefined
   });
 
   try {

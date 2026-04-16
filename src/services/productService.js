@@ -199,7 +199,7 @@ const createProduct = async (userId, productData) => {
         condition_status: condition_status || 'USED',
         starting_price,
         images: images || [],
-        status: 'ACTIVE',
+        status: 'PENDING',
         start_time: dbStartTime,
         end_time: dbEndTime,
         buy_now_price: buyNow,

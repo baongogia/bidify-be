@@ -12,7 +12,11 @@ async function testDatabase() {
             host: process.env.DB_HOST || 'localhost',
             user: process.env.DB_USER || 'root',
             password: process.env.DB_PASSWORD,
-            database: process.env.DB_NAME || 'auction_db'
+            database: process.env.DB_NAME || 'auction_db',
+            ssl: process.env.DB_SSL === 'true' ? {
+                minVersion: 'TLSv1.2',
+                rejectUnauthorized: true
+            } : undefined
         });
 
         console.log('✅ Database connected\n');
@@ -83,9 +87,3 @@ async function testDatabase() {
 }
 
 testDatabase();
-  } finally {
-    await connection.end();
-  }
-};
-
-test();
